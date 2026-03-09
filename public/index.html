@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mission Control</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#05080E;color:#8A9BB0;font-family:'Share Tech Mono',monospace;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+  ::-webkit-scrollbar{width:3px}::-webkit-scrollbar-thumb{background:#F7B731}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+  @keyframes slideIn{from{opacity:0;transform:translateX(-5px)}to{opacity:1;transform:translateX(0)}}
+  @keyframes dropIn{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}
+  .dot{display:inline-block;border-radius:50%;animation:pulse 2.2s ease-in-out infinite;flex-shrink:0}
+  .card{background:rgba(13,20,30,.85);border:1px solid rgba(255,255,255,.05);border-radius:8px;padding:14px;transition:border-color .2s}
+  .tab{background:none;border:none;cursor:pointer;font-family:'Share Tech Mono',monospace;font-size:9px;letter-spacing:2px;text-transform:uppercase;padding:9px 16px;color:#3A4A5A;border-bottom:2px solid transparent;transition:all .2s}
+  .tab.on{color:#F7B731;border-bottom-color:#F7B731}
+  .label{font-size:7px;letter-spacing:2px;color:#1E2A35;text-transform:uppercase;margin-bottom:3px}
+  .scanline{position:fixed;inset:0;pointer-events:none;z-index:999;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,.03) 2px,rgba(0,0,0,.03) 4px)}
+  .badge{font-size:7px;padding:1px 5px;border-radius:3px;margin-left:5px;font-family:'Share Tech Mono',monospace}
+  .log-row{animation:slideIn .2s ease forwards;border-bottom:1px solid rgba(255,255,255,.03);padding:5px 0;display:flex;gap:12px}
+  .stat-box{background:rgba(0,0,0,.3);border-radius:6px;padding:8px 10px}
+  .alert{animation:dropIn .3s ease forwards;position:fixed;top:0;left:0;right:0;z-index:1000;padding:9px 24px;display:flex;align-items:center;gap:10px;font-size:11px}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<div class="scanline"></div>
+<script>
+const { useState, useEffect, useRef, useCallback } = React;
+const e = React.createElement;
+
+// ── Config — edit to match your agent names and colors ────────────────────────
+const AGENT_COLORS = {
+  "jarvis":         "#F7B731",
+  "ceo":            "#F7B731",
+  "mission":        "#34D399",
+  "dashboard":      "#34D399",
+  "codeforge":      "#4ECDC4",
+  "datapulse":      "#F97316",
+  "narrativeengine":"#FF6B9D",
+  "bughunter":      "#A78BFA",
+};
+
+function getColor(name = "") {
+  const n = name.toLowerCase();
+  const key = Object.keys(AGENT_COLORS).find(k => n.includes(k));
+  return key ? AGENT_COLORS[key] : "#8A9BB0";
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function fmtUptime(ms) {
+  if (!ms || ms < 0) return "—";
+  const s=Math.floor(ms/1000),m=Math.floor(s/60),h=Math.floor(m/60),d=Math.floor(h/24);
+  if(d>0) return d+"d "+(h%24)+"h";
+  if(h>0) return h+"h "+(m%60)+"m";
+  if(m>0) return m+"m "+(s%60)+"s";
+  return s+"s";
+}
+
+function fmtTime(iso) {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit",second:"2-digit"});
+}
+
+function fmtNum(n) { return (n||0).toLocaleString(); }
+
+// ── Components ────────────────────────────────────────────────────────────────
+function Dot({color="#34D399", size=7}) {
+  return e("span",{className:"dot",style:{width:size,height:size,background:color}});
+}
+
+function UsageBar({used=0, limit=1, color="#F7B731", h=6}) {
+  const pct=Math.min((used/limit)*100,100);
+  const c=pct>90?"#F87171":pct>75?"#F59E0B":color;
+  return e("div",{style:{background:"rgba(0,0,0,.35)",borderRadius:99,height:h,width:"100%",overflow:"hidden"}},
+    e("div",{style:{width:pct+"%",height:"100%",background:c,borderRadius:99,transition:"width 1s ease",boxShadow:pct>75?"0 0 8px "+c+"88":"none"}})
+  );
+}
+
+function StatBox({label, value, color="#D4C9B4", small=false}) {
+  return e("div",{className:"stat-box"},
+    e("div",{className:"label"},label),
+    e("div",{style:{fontFamily:small?"'Share Tech Mono',monospace":"'Playfair Display',serif",fontWeight:small?400:900,fontSize:small?10:14,color}},""+value)
+  );
+}
+
+// ── Top Bar ───────────────────────────────────────────────────────────────────
+function TopBar({pm2=[], system={}, now, error}) {
+  const jarvis = pm2.find(p=>p.name.toLowerCase().includes("jarvis")||p.name.toLowerCase().includes("ceo"));
+  return e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 20px",borderBottom:"1px solid rgba(247,183,49,.12)",background:"rgba(5,8,14,.98)",flexShrink:0}},
+    e("div",{style:{display:"flex",alignItems:"center",gap:12}},
+      e("span",{style:{fontSize:18}},"🎬"),
+      e("div",null,
+        e("div",{style:{fontFamily:"'Playfair Display',serif",fontSize:16,fontWeight:900,color:"#F7B731",letterSpacing:1}},"Mission Control"),
+        e("div",{style:{fontSize:7,color:"#1E2A35",letterSpacing:3}},"OPENCLAW AGENT DASHBOARD")
+      ),
+      e("div",{style:{width:1,height:24,background:"rgba(255,255,255,.06)",margin:"0 6px"}}),
+      error
+        ? e("div",{style:{display:"flex",alignItems:"center",gap:6}},
+            e(Dot,{color:"#F87171",size:6}),
+            e("span",{style:{fontSize:9,color:"#F87171",letterSpacing:1}},"API ERROR")
+          )
+        : e("div",{style:{display:"flex",alignItems:"center",gap:6}},
+            e(Dot,{color:jarvis?.status==="online"?"#34D399":"#F59E0B",size:6}),
+            e("span",{style:{fontSize:9,color:jarvis?.status==="online"?"#34D399":"#F59E0B",letterSpacing:1}},
+              jarvis?.status==="online"?"NOMINAL":"CHECK AGENTS"
+            )
+          )
+    ),
+    e("div",{style:{display:"flex",gap:20,alignItems:"center"}},
+      e("div",null,e("div",{className:"label"},"MEMORY"),e("div",{style:{fontSize:9,color:(system.memPct||0)>80?"#F59E0B":"#34D399"}},(system.memPct||0)+"%")),
+      e("div",null,e("div",{className:"label"},"DISK"),  e("div",{style:{fontSize:9,color:"#34D399"}},system.disk||"?")),
+      e("div",null,e("div",{className:"label"},"LOAD"),  e("div",{style:{fontSize:9,color:"#34D399"}},(system.loadAvg||"0 0 0").split(" ")[0])),
+      e("div",{style:{fontFamily:"'Share Tech Mono',monospace",fontSize:13,color:"#F7B731",letterSpacing:2,minWidth:76}},
+        now.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit",second:"2-digit"})
+      )
+    )
+  );
+}
+
+// ── Agents Tab ────────────────────────────────────────────────────────────────
+function AgentsTab({pm2=[]}) {
+  if (!pm2.length) return e("div",{style:{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"60%",gap:10}},
+    e("div",{style:{fontSize:30}},"💤"),
+    e("div",{style:{fontSize:10,color:"#1E2A35"}},"NO PM2 PROCESSES FOUND")
+  );
+  return e("div",{style:{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:12,padding:"16px 20px",overflowY:"auto",flex:1,alignContent:"start"}},
+    pm2.map(p => {
+      const c=getColor(p.name);
+      const online=p.status==="online";
+      return e("div",{key:p.name,className:"card",style:{borderColor:c+"28"}},
+        e("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}},
+          e("div",null,
+            e("div",{style:{fontFamily:"'Playfair Display',serif",fontSize:14,fontWeight:700,color:c,marginBottom:2}},p.name),
+            e("div",{className:"label"},"PID "+(p.pid||"—"))
+          ),
+          e("div",{style:{display:"flex",alignItems:"center",gap:5}},
+            e(Dot,{color:online?"#34D399":p.status==="errored"?"#F87171":"#F59E0B",size:8}),
+            e("span",{style:{fontSize:8,color:online?"#34D399":"#F87171",letterSpacing:1}},p.status.toUpperCase())
+          )
+        ),
+        e("div",{style:{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:8}},
+          e(StatBox,{label:"UPTIME",   value:fmtUptime(p.uptime),   color:c, small:true}),
+          e(StatBox,{label:"RESTARTS", value:p.restarts,             color:p.restarts>5?"#F59E0B":"#D4C9B4", small:true}),
+          e(StatBox,{label:"CPU",      value:p.cpu+"%",              color:p.cpu>80?"#F87171":"#D4C9B4", small:true}),
+          e(StatBox,{label:"MEMORY",   value:p.memory+"MB",         color:p.memory>350?"#F59E0B":"#D4C9B4", small:true})
+        )
+      );
+    })
+  );
+}
+
+// ── Sessions Tab ─────────────────────────────────────────────────────────────
+function SessionsTab({sessions=[]}) {
+  if (!sessions.length) return e("div",{style:{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"60%",gap:10}},
+    e("div",{style:{fontSize:30}},"💤"),
+    e("div",{style:{fontSize:10,color:"#1E2A35"}},"NO ACTIVE RALPH LOOP SESSIONS")
+  );
+  return e("div",{style:{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:12,padding:"16px 20px",overflowY:"auto",flex:1,alignContent:"start"}},
+    sessions.map(s => {
+      const c=s.alive?"#34D399":"#F87171";
+      return e("div",{key:s.name,className:"card",style:{borderColor:c+"28"}},
+        e("div",{style:{display:"flex",justifyContent:"space-between",marginBottom:8}},
+          e("div",{style:{fontFamily:"'Playfair Display',serif",fontSize:13,fontWeight:700,color:c}},s.name),
+          e("div",{style:{display:"flex",alignItems:"center",gap:5}},
+            e(Dot,{color:c,size:6}),
+            e("span",{style:{fontSize:8,color:c,letterSpacing:1}},s.status.toUpperCase())
+          )
+        ),
+        e("div",{className:"label"},"TASK"),
+        e("div",{style:{fontSize:9,color:"#5A6A7E",lineHeight:1.5,marginBottom:10}},s.task),
+        e("div",{style:{display:"flex",gap:14}},
+          e("div",null,e("div",{className:"label"},"ENGINE"),e("div",{style:{fontSize:9,color:s.agent==="claude"?"#F7B731":"#4ECDC4"}},s.agent?.toUpperCase())),
+          e("div",null,e("div",{className:"label"},"STARTED"),e("div",{style:{fontSize:9,color:"#4A5A6A"}},s.started?fmtTime(s.started):"?"))
+        )
+      );
+    })
+  );
+}
+
+// ── Tokens Tab ───────────────────────────────────────────────────────────────
+function TokensTab({tokens={}}) {
+  const rows = [
+    {label:"Claude API", sub:"CEO agent only",   data:tokens.claude||{}, color:"#F7B731", costLabel:true},
+    {label:"Codex Pro",  sub:"All sub-agents",   data:tokens.codex||{},  color:"#4ECDC4", costLabel:false},
+  ];
+  return e("div",{style:{flex:1,overflowY:"auto",padding:"16px 20px"}},
+    e("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}},
+      rows.map(row => {
+        const pct=((( row.data.used||0)/(row.data.limit||100000))*100).toFixed(1);
+        const warn=parseFloat(pct)>75, crit=parseFloat(pct)>90;
+        return e("div",{key:row.label,className:"card",style:{borderColor:(crit?"#F87171":warn?"#F59E0B":row.color)+"28"}},
+          e("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}},
+            e("div",null,
+              e("div",{style:{fontFamily:"'Playfair Display',serif",fontSize:14,fontWeight:700,color:row.color,marginBottom:2}},row.label),
+              e("div",{className:"label"},row.sub)
+            ),
+            e("div",{style:{textAlign:"right"}},
+              e("div",{style:{fontFamily:"'Playfair Display',serif",fontSize:26,fontWeight:900,color:crit?"#F87171":warn?"#F59E0B":"#D4C9B4",lineHeight:1}},pct+"%"),
+              e("div",{className:"label"},"DAILY QUOTA")
+            )
+          ),
+          e(UsageBar,{used:row.data.used||0,limit:row.data.limit||100000,color:row.color,h:8}),
+          e("div",{style:{fontSize:8,color:"#1E2A35",marginTop:4,display:"flex",justifyContent:"space-between"}},
+            e("span",null,fmtNum(row.data.used||0)+" / "+fmtNum(row.data.limit||0)+" tokens"),
+            e("span",null,fmtNum((row.data.limit||0)-(row.data.used||0))+" remaining")
+          ),
+          e("div",{style:{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginTop:12}},
+            e(StatBox,{label:"TOKENS TODAY", value:fmtNum(row.data.used||0),  color:row.color, small:true}),
+            e(StatBox,{label:"API CALLS",    value:(row.data.reqs||0).toString(), color:row.color, small:true}),
+            e(StatBox,{label:"EST. COST",    value:row.costLabel?"$"+((row.data.cost||0).toFixed(4)):"~$0", color:"#34D399", small:true})
+          ),
+          crit && e("div",{style:{marginTop:12,background:"rgba(248,113,113,.1)",border:"1px solid rgba(248,113,113,.3)",borderRadius:6,padding:"8px 12px",fontSize:9,color:"#F87171"}},
+            "🚨 QUOTA CRITICAL — requests may be throttled"
+          ),
+          !crit && warn && e("div",{style:{marginTop:12,background:"rgba(245,158,11,.1)",border:"1px solid rgba(245,158,11,.3)",borderRadius:6,padding:"8px 12px",fontSize:9,color:"#F59E0B"}},
+            "⚠️ QUOTA HIGH — approaching daily limit"
+          )
+        );
+      })
+    )
+  );
+}
+
+// ── Logs Tab ─────────────────────────────────────────────────────────────────
+function LogsTab({logs=[]}) {
+  return e("div",{style:{flex:1,overflowY:"auto",padding:"12px 20px"}},
+    logs.length===0
+      ? e("div",{style:{display:"flex",alignItems:"center",justifyContent:"center",height:"60%",fontSize:10,color:"#1E2A35"}},"NO LOG ENTRIES FOUND")
+      : logs.map((l,i) =>
+          e("div",{key:i,className:"log-row"},
+            e("span",{style:{fontSize:8,color:"#1E2A35",flexShrink:0,minWidth:76}},l.ts?new Date(l.ts).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit",second:"2-digit"}):"—"),
+            e("span",{style:{fontSize:10,color:"#5A6A7E",lineHeight:1.5}},l.msg)
+          )
+        )
+  );
+}
+
+// ── System Tab ───────────────────────────────────────────────────────────────
+function SystemTab({system={}}) {
+  const rows = [
+    {label:"Uptime",   value:system.uptime||"—"},
+    {label:"Disk",     value:system.disk||"—"},
+    {label:"Memory",   value:(system.memUsed||0)+"MB / "+(system.memTotal||0)+"MB ("+( system.memPct||0)+"%)"},
+    {label:"Load Avg", value:system.loadAvg||"—"},
+    {label:"Ports",    value:(system.ports||[]).join(", ")||"—"},
+  ];
+  return e("div",{style:{flex:1,overflowY:"auto",padding:"16px 20px"}},
+    e("div",{style:{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:12}},
+      rows.map(r => e("div",{key:r.label,className:"card"},
+        e("div",{className:"label",style:{marginBottom:8}},r.label),
+        e("div",{style:{fontFamily:"'Share Tech Mono',monospace",fontSize:11,color:"#D4C9B4",lineHeight:1.6}},r.value)
+      ))
+    )
+  );
+}
+
+// ── Main App ──────────────────────────────────────────────────────────────────
+function App() {
+  const [data,   setData]   = useState(null);
+  const [logs,   setLogs]   = useState([]);
+  const [tab,    setTab]    = useState("agents");
+  const [now,    setNow]    = useState(new Date());
+  const [error,  setError]  = useState(null);
+  const [alert,  setAlert]  = useState(null);
+
+  const prevTokens = useRef(null);
+
+  const fetchData = useCallback(async () => {
+    try {
+      const [status, logsRes] = await Promise.all([
+        fetch("/api/status").then(r=>r.json()),
+        fetch("/api/logs").then(r=>r.json()),
+      ]);
+      // Detect token threshold crossings
+      if (prevTokens.current && status.tokens) {
+        const prev = prevTokens.current;
+        const curr = status.tokens;
+        if (curr.claude && prev.claude) {
+          const pct = (curr.claude.used / curr.claude.limit) * 100;
+          const prevPct = (prev.claude.used / prev.claude.limit) * 100;
+          if (pct > 90 && prevPct <= 90) setAlert({msg:"🚨 Claude API quota >90% — Jarvis throttling", sev:"error"});
+          else if (pct > 75 && prevPct <= 75) setAlert({msg:"⚠️ Claude API quota >75%", sev:"warn"});
+        }
+        if (curr.codex && prev.codex) {
+          const pct = (curr.codex.used / curr.codex.limit) * 100;
+          const prevPct = (prev.codex.used / prev.codex.limit) * 100;
+          if (pct > 90 && prevPct <= 90) setAlert({msg:"🚨 Codex quota >90% — sub-agents queuing", sev:"error"});
+          else if (pct > 75 && prevPct <= 75) setAlert({msg:"⚠️ Codex quota >75%", sev:"warn"});
+        }
+      }
+      prevTokens.current = status.tokens;
+      setData(status);
+      setLogs(logsRes.logs || []);
+      setError(null);
+    } catch(err) { setError(err.message); }
+  }, []);
+
+  useEffect(() => { fetchData(); }, []);
+  useEffect(() => { const t=setInterval(()=>{fetchData();setNow(new Date());},5000); return()=>clearInterval(t); }, [fetchData]);
+  useEffect(() => {
+    if (!alert) return;
+    const t = setTimeout(() => setAlert(null), 9000);
+    return () => clearTimeout(t);
+  }, [alert]);
+
+  const { pm2=[], sessions=[], system={}, tokens={} } = data || {};
+  const errorCount = 0; // extend: wire to error events from logs
+
+  if (!data) return e("div",{style:{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#F7B731",fontSize:12}},
+    "🎬 Connecting to Mission Control..."
+  );
+
+  return e("div",{style:{display:"flex",flexDirection:"column",height:"100vh",overflow:"hidden"}},
+
+    // Alert
+    alert && e("div",{className:"alert",style:{
+      background:alert.sev==="error"?"rgba(248,113,113,.12)":"rgba(245,158,11,.12)",
+      borderBottom:`1px solid ${alert.sev==="error"?"#F87171":"#F59E0B"}`,
+      color:alert.sev==="error"?"#F87171":"#F59E0B",
+    }}, alert.msg, e("span",{style:{marginLeft:"auto",fontSize:9,opacity:.5}},now.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"}))),
+
+    e(TopBar,{pm2,system,now,error}),
+
+    // Tabs
+    e("div",{style:{display:"flex",borderBottom:"1px solid rgba(255,255,255,.04)",flexShrink:0}},
+      [
+        {id:"agents",   label:"Agents",   badge:pm2.filter(p=>p.status!=="online").length},
+        {id:"sessions", label:"Sessions", badge:sessions.filter(s=>!s.alive&&s.status==="running").length},
+        {id:"tokens",   label:"Tokens",   badge:0},
+        {id:"logs",     label:"Logs",     badge:0},
+        {id:"system",   label:"System",   badge:0},
+      ].map(t =>
+        e("button",{key:t.id,className:"tab "+(tab===t.id?"on":""),onClick:()=>setTab(t.id)},
+          t.label,
+          t.badge > 0 && e("span",{className:"badge",style:{background:"#F87171",color:"#000"}},t.badge)
+        )
+      )
+    ),
+
+    // Tab content
+    e("div",{style:{flex:1,display:"flex",overflow:"hidden"}},
+      tab==="agents"   && e(AgentsTab,{pm2}),
+      tab==="sessions" && e(SessionsTab,{sessions}),
+      tab==="tokens"   && e(TokensTab,{tokens}),
+      tab==="logs"     && e(LogsTab,{logs}),
+      tab==="system"   && e(SystemTab,{system})
+    )
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(e(App));
+</script>
+</body>
+</html>

@@ -1,20 +1,25 @@
 "use strict";
-const fs          = require("fs");
-const getTmux     = require("./tmux");
 
-module.exports = function getSessions(sessionsFile, tmuxSocket) {
+const fs = require("fs");
+
+module.exports = function getSessions(sessionsFile) {
   try {
-    const stored = sessionsFile && fs.existsSync(sessionsFile)
-      ? JSON.parse(fs.readFileSync(sessionsFile, "utf8"))
-      : {};
-    const active = getTmux(tmuxSocket);
-    return Object.entries(stored).map(([name, info]) => ({
-      name,
-      alive:   active.includes(name),
-      task:    info.task || info.prd || "unknown",
-      agent:   info.agent || "codex",
-      started: info.started || null,
-      status:  active.includes(name) ? "running" : (info.status || "stopped"),
-    }));
-  } catch { return []; }
+    if (!fs.existsSync(sessionsFile)) return [];
+    const stored = JSON.parse(fs.readFileSync(sessionsFile, "utf8"));
+    return Object.entries(stored)
+      .map(([key, info]) => ({
+        key,
+        displayName: info.displayName || key,
+        chatType: info.chatType || "unknown",
+        sessionId: info.sessionId || null,
+        updatedAt: info.updatedAt || null,
+        abortedLastRun: Boolean(info.abortedLastRun),
+        lastChannel: info.lastChannel || null,
+        lastTo: info.lastTo || null,
+        systemSent: Boolean(info.systemSent),
+      }))
+      .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  } catch {
+    return [];
+  }
 };

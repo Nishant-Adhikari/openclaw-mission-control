@@ -30,35 +30,25 @@
 <div id="root"></div>
 <div class="scanline"></div>
 <script>
-const { useState, useEffect, useRef, useCallback } = React;
+const { useState, useEffect, useCallback } = React;
 const e = React.createElement;
-
-// ── Config — edit to match your agent names and colors ────────────────────────
-const AGENT_COLORS = {
-  "jarvis":         "#F7B731",
-  "ceo":            "#F7B731",
-  "mission":        "#34D399",
-  "dashboard":      "#34D399",
-  "codeforge":      "#4ECDC4",
-  "datapulse":      "#F97316",
-  "narrativeengine":"#FF6B9D",
-  "bughunter":      "#A78BFA",
-};
 
 function getColor(name = "") {
   const n = name.toLowerCase();
-  const key = Object.keys(AGENT_COLORS).find(k => n.includes(k));
-  return key ? AGENT_COLORS[key] : "#8A9BB0";
+  if (n.includes("jarvis")) return "#F7B731";
+  if (n.includes("discord")) return "#4ECDC4";
+  if (n.includes("cron")) return "#34D399";
+  return "#8A9BB0";
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-function fmtUptime(ms) {
-  if (!ms || ms < 0) return "—";
-  const s=Math.floor(ms/1000),m=Math.floor(s/60),h=Math.floor(m/60),d=Math.floor(h/24);
-  if(d>0) return d+"d "+(h%24)+"h";
-  if(h>0) return h+"h "+(m%60)+"m";
-  if(m>0) return m+"m "+(s%60)+"s";
-  return s+"s";
+function fmtAgo(ts) {
+  if (!ts) return "—";
+  const ms = Date.now() - ts;
+  if (ms < 60000) return Math.max(1, Math.floor(ms / 1000)) + "s ago";
+  if (ms < 3600000) return Math.floor(ms / 60000) + "m ago";
+  if (ms < 86400000) return Math.floor(ms / 3600000) + "h ago";
+  return Math.floor(ms / 86400000) + "d ago";
 }
 
 function fmtTime(iso) {
@@ -89,14 +79,15 @@ function StatBox({label, value, color="#D4C9B4", small=false}) {
 }
 
 // ── Top Bar ───────────────────────────────────────────────────────────────────
-function TopBar({pm2=[], system={}, now, error}) {
-  const jarvis = pm2.find(p=>p.name.toLowerCase().includes("jarvis")||p.name.toLowerCase().includes("ceo"));
+function TopBar({openclaw={}, system={}, now, error}) {
+  const discord = openclaw.channels?.channelAccounts?.discord?.[0];
+  const healthy = openclaw.service?.healthy && discord?.probe?.ok;
   return e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 20px",borderBottom:"1px solid rgba(247,183,49,.12)",background:"rgba(5,8,14,.98)",flexShrink:0}},
     e("div",{style:{display:"flex",alignItems:"center",gap:12}},
       e("span",{style:{fontSize:18}},"🎬"),
       e("div",null,
         e("div",{style:{fontFamily:"'Playfair Display',serif",fontSize:16,fontWeight:900,color:"#F7B731",letterSpacing:1}},"Mission Control"),
-        e("div",{style:{fontSize:7,color:"#1E2A35",letterSpacing:3}},"OPENCLAW AGENT DASHBOARD")
+        e("div",{style:{fontSize:7,color:"#1E2A35",letterSpacing:3}},"OPENCLAW OPS DASHBOARD")
       ),
       e("div",{style:{width:1,height:24,background:"rgba(255,255,255,.06)",margin:"0 6px"}}),
       error
@@ -105,16 +96,17 @@ function TopBar({pm2=[], system={}, now, error}) {
             e("span",{style:{fontSize:9,color:"#F87171",letterSpacing:1}},"API ERROR")
           )
         : e("div",{style:{display:"flex",alignItems:"center",gap:6}},
-            e(Dot,{color:jarvis?.status==="online"?"#34D399":"#F59E0B",size:6}),
-            e("span",{style:{fontSize:9,color:jarvis?.status==="online"?"#34D399":"#F59E0B",letterSpacing:1}},
-              jarvis?.status==="online"?"NOMINAL":"CHECK AGENTS"
+            e(Dot,{color:healthy?"#34D399":"#F59E0B",size:6}),
+            e("span",{style:{fontSize:9,color:healthy?"#34D399":"#F59E0B",letterSpacing:1}},
+              healthy?"NOMINAL":"CHECK OPENCLAW"
             )
           )
     ),
     e("div",{style:{display:"flex",gap:20,alignItems:"center"}},
+      e("div",null,e("div",{className:"label"},"SERVICE"),e("div",{style:{fontSize:9,color:openclaw.service?.healthy?"#34D399":"#F87171"}},openclaw.service?.active||"—")),
       e("div",null,e("div",{className:"label"},"MEMORY"),e("div",{style:{fontSize:9,color:(system.memPct||0)>80?"#F59E0B":"#34D399"}},(system.memPct||0)+"%")),
       e("div",null,e("div",{className:"label"},"DISK"),  e("div",{style:{fontSize:9,color:"#34D399"}},system.disk||"?")),
-      e("div",null,e("div",{className:"label"},"LOAD"),  e("div",{style:{fontSize:9,color:"#34D399"}},(system.loadAvg||"0 0 0").split(" ")[0])),
+      e("div",null,e("div",{className:"label"},"TAILSCALE"),  e("div",{style:{fontSize:9,color:system.tailscaleIp?"#34D399":"#8A9BB0"}},system.tailscaleIp||"off")),
       e("div",{style:{fontFamily:"'Share Tech Mono',monospace",fontSize:13,color:"#F7B731",letterSpacing:2,minWidth:76}},
         now.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit",second:"2-digit"})
       )
@@ -122,103 +114,100 @@ function TopBar({pm2=[], system={}, now, error}) {
   );
 }
 
-// ── Agents Tab ────────────────────────────────────────────────────────────────
-function AgentsTab({pm2=[]}) {
-  if (!pm2.length) return e("div",{style:{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"60%",gap:10}},
-    e("div",{style:{fontSize:30}},"💤"),
-    e("div",{style:{fontSize:10,color:"#1E2A35"}},"NO PM2 PROCESSES FOUND")
-  );
+// ── Overview Tab ──────────────────────────────────────────────────────────────
+function OverviewTab({openclaw={}, system={}, tokens={}}) {
+  const discord = openclaw.channels?.channelAccounts?.discord?.[0] || {};
+  const jobs = openclaw.cron?.jobs || [];
+  const unhealthyJobs = jobs.filter(j => (j.state?.lastStatus || "ok") !== "ok").length;
   return e("div",{style:{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:12,padding:"16px 20px",overflowY:"auto",flex:1,alignContent:"start"}},
-    pm2.map(p => {
-      const c=getColor(p.name);
-      const online=p.status==="online";
-      return e("div",{key:p.name,className:"card",style:{borderColor:c+"28"}},
-        e("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}},
-          e("div",null,
-            e("div",{style:{fontFamily:"'Playfair Display',serif",fontSize:14,fontWeight:700,color:c,marginBottom:2}},p.name),
-            e("div",{className:"label"},"PID "+(p.pid||"—"))
-          ),
-          e("div",{style:{display:"flex",alignItems:"center",gap:5}},
-            e(Dot,{color:online?"#34D399":p.status==="errored"?"#F87171":"#F59E0B",size:8}),
-            e("span",{style:{fontSize:8,color:online?"#34D399":"#F87171",letterSpacing:1}},p.status.toUpperCase())
-          )
-        ),
-        e("div",{style:{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:8}},
-          e(StatBox,{label:"UPTIME",   value:fmtUptime(p.uptime),   color:c, small:true}),
-          e(StatBox,{label:"RESTARTS", value:p.restarts,             color:p.restarts>5?"#F59E0B":"#D4C9B4", small:true}),
-          e(StatBox,{label:"CPU",      value:p.cpu+"%",              color:p.cpu>80?"#F87171":"#D4C9B4", small:true}),
-          e(StatBox,{label:"MEMORY",   value:p.memory+"MB",         color:p.memory>350?"#F59E0B":"#D4C9B4", small:true})
-        )
-      );
-    })
+    e("div",{className:"card"},
+      e("div",{style:{fontFamily:"'Playfair Display',serif",fontSize:14,fontWeight:700,color:"#F7B731",marginBottom:10}},"OpenClaw"),
+      e("div",{style:{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:8}},
+        e(StatBox,{label:"VERSION", value:openclaw.version?.version || "—", color:"#F7B731", small:true}),
+        e(StatBox,{label:"SERVICE", value:openclaw.service?.active || "—", color:openclaw.service?.healthy ? "#34D399" : "#F87171", small:true}),
+        e(StatBox,{label:"MODEL", value:openclaw.config?.primaryModel || "—", color:"#D4C9B4", small:true}),
+        e(StatBox,{label:"HEARTBEAT", value:openclaw.config?.heartbeatEvery || "—", color:"#D4C9B4", small:true})
+      )
+    ),
+    e("div",{className:"card"},
+      e("div",{style:{fontFamily:"'Playfair Display',serif",fontSize:14,fontWeight:700,color:"#4ECDC4",marginBottom:10}},"Discord"),
+      e("div",{style:{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:8}},
+        e(StatBox,{label:"CONNECTED", value:discord.connected ? "yes" : "no", color:discord.connected ? "#34D399" : "#F87171", small:true}),
+        e(StatBox,{label:"BOT", value:discord.bot?.username || "—", color:"#4ECDC4", small:true}),
+        e(StatBox,{label:"PROBE", value:discord.probe?.ok ? "ok" : "bad", color:discord.probe?.ok ? "#34D399" : "#F87171", small:true}),
+        e(StatBox,{label:"LAST CONNECT", value:fmtAgo(discord.lastConnectedAt), color:"#D4C9B4", small:true})
+      )
+    ),
+    e("div",{className:"card"},
+      e("div",{style:{fontFamily:"'Playfair Display',serif",fontSize:14,fontWeight:700,color:"#34D399",marginBottom:10}},"Cron"),
+      e("div",{style:{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:8}},
+        e(StatBox,{label:"JOBS", value:jobs.length, color:"#34D399", small:true}),
+        e(StatBox,{label:"UNHEALTHY", value:unhealthyJobs, color:unhealthyJobs ? "#F59E0B" : "#34D399", small:true}),
+        e(StatBox,{label:"DAILY NOTE", value:openclaw.dailyNote?.exists ? "present" : "missing", color:openclaw.dailyNote?.exists ? "#34D399" : "#F87171", small:true}),
+        e(StatBox,{label:"TAILSCALE", value:system.tailscaleIp || "off", color:system.tailscaleIp ? "#34D399" : "#8A9BB0", small:true})
+      )
+    ),
+    e("div",{className:"card"},
+      e("div",{style:{fontFamily:"'Playfair Display',serif",fontSize:14,fontWeight:700,color:"#D4C9B4",marginBottom:10}},"Budget Policy"),
+      e("div",{style:{display:"grid",gap:8}},
+        e(StatBox,{label:"DAILY TARGET", value:tokens.dailyTarget || "—", color:"#D4C9B4", small:true}),
+        e(StatBox,{label:"MONTHLY TARGET", value:tokens.monthlyTarget || "—", color:"#D4C9B4", small:true}),
+        e(StatBox,{label:"ROUTINE OUTPUT", value:tokens.routineOutputTarget || "—", color:"#D4C9B4", small:true}),
+        e(StatBox,{label:"COMPLEX OUTPUT", value:tokens.complexOutputTarget || "—", color:"#D4C9B4", small:true})
+      )
+    )
   );
 }
 
-// ── Sessions Tab ─────────────────────────────────────────────────────────────
 function SessionsTab({sessions=[]}) {
   if (!sessions.length) return e("div",{style:{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"60%",gap:10}},
     e("div",{style:{fontSize:30}},"💤"),
-    e("div",{style:{fontSize:10,color:"#1E2A35"}},"NO ACTIVE RALPH LOOP SESSIONS")
+    e("div",{style:{fontSize:10,color:"#1E2A35"}},"NO OPENCLAW SESSIONS FOUND")
   );
   return e("div",{style:{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:12,padding:"16px 20px",overflowY:"auto",flex:1,alignContent:"start"}},
     sessions.map(s => {
-      const c=s.alive?"#34D399":"#F87171";
+      const c=s.abortedLastRun?"#F87171":"#34D399";
       return e("div",{key:s.name,className:"card",style:{borderColor:c+"28"}},
         e("div",{style:{display:"flex",justifyContent:"space-between",marginBottom:8}},
-          e("div",{style:{fontFamily:"'Playfair Display',serif",fontSize:13,fontWeight:700,color:c}},s.name),
+          e("div",{style:{fontFamily:"'Playfair Display',serif",fontSize:13,fontWeight:700,color:c}},s.displayName),
           e("div",{style:{display:"flex",alignItems:"center",gap:5}},
             e(Dot,{color:c,size:6}),
-            e("span",{style:{fontSize:8,color:c,letterSpacing:1}},s.status.toUpperCase())
+            e("span",{style:{fontSize:8,color:c,letterSpacing:1}},s.abortedLastRun?"ABORTED":"ACTIVE")
           )
         ),
-        e("div",{className:"label"},"TASK"),
-        e("div",{style:{fontSize:9,color:"#5A6A7E",lineHeight:1.5,marginBottom:10}},s.task),
-        e("div",{style:{display:"flex",gap:14}},
-          e("div",null,e("div",{className:"label"},"ENGINE"),e("div",{style:{fontSize:9,color:s.agent==="claude"?"#F7B731":"#4ECDC4"}},s.agent?.toUpperCase())),
-          e("div",null,e("div",{className:"label"},"STARTED"),e("div",{style:{fontSize:9,color:"#4A5A6A"}},s.started?fmtTime(s.started):"?"))
+        e("div",{style:{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:8}},
+          e(StatBox,{label:"CHAT TYPE", value:s.chatType || "—", color:getColor(s.lastChannel || ""), small:true}),
+          e(StatBox,{label:"UPDATED", value:fmtAgo(s.updatedAt), color:"#D4C9B4", small:true}),
+          e(StatBox,{label:"CHANNEL", value:s.lastChannel || "—", color:"#4ECDC4", small:true}),
+          e(StatBox,{label:"TARGET", value:s.lastTo || "—", color:"#D4C9B4", small:true})
         )
       );
     })
   );
 }
 
-// ── Tokens Tab ───────────────────────────────────────────────────────────────
-function TokensTab({tokens={}}) {
-  const rows = [
-    {label:"Claude API", sub:"CEO agent only",   data:tokens.claude||{}, color:"#F7B731", costLabel:true},
-    {label:"Codex Pro",  sub:"All sub-agents",   data:tokens.codex||{},  color:"#4ECDC4", costLabel:false},
-  ];
+function CronTab({jobs=[]}) {
+  if (!jobs.length) return e("div",{style:{display:"flex",alignItems:"center",justifyContent:"center",height:"60%",fontSize:10,color:"#1E2A35"}},"NO CRON JOBS FOUND");
   return e("div",{style:{flex:1,overflowY:"auto",padding:"16px 20px"}},
-    e("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}},
-      rows.map(row => {
-        const pct=((( row.data.used||0)/(row.data.limit||100000))*100).toFixed(1);
-        const warn=parseFloat(pct)>75, crit=parseFloat(pct)>90;
-        return e("div",{key:row.label,className:"card",style:{borderColor:(crit?"#F87171":warn?"#F59E0B":row.color)+"28"}},
-          e("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}},
+    e("div",{style:{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(320px,1fr))",gap:12}},
+      jobs.map(job => {
+        const ok = (job.state?.lastStatus || "ok") === "ok";
+        return e("div",{key:job.id,className:"card",style:{borderColor:(ok?"#34D399":"#F59E0B")+"28"}},
+          e("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}},
             e("div",null,
-              e("div",{style:{fontFamily:"'Playfair Display',serif",fontSize:14,fontWeight:700,color:row.color,marginBottom:2}},row.label),
-              e("div",{className:"label"},row.sub)
+              e("div",{style:{fontFamily:"'Playfair Display',serif",fontSize:14,fontWeight:700,color:ok?"#34D399":"#F59E0B"}},job.name),
+              e("div",{className:"label"},job.sessionTarget || "—")
             ),
-            e("div",{style:{textAlign:"right"}},
-              e("div",{style:{fontFamily:"'Playfair Display',serif",fontSize:26,fontWeight:900,color:crit?"#F87171":warn?"#F59E0B":"#D4C9B4",lineHeight:1}},pct+"%"),
-              e("div",{className:"label"},"DAILY QUOTA")
+            e("div",{style:{display:"flex",alignItems:"center",gap:5}},
+              e(Dot,{color:ok?"#34D399":"#F59E0B",size:6}),
+              e("span",{style:{fontSize:8,color:ok?"#34D399":"#F59E0B",letterSpacing:1}},(job.state?.lastStatus || "unknown").toUpperCase())
             )
           ),
-          e(UsageBar,{used:row.data.used||0,limit:row.data.limit||100000,color:row.color,h:8}),
-          e("div",{style:{fontSize:8,color:"#1E2A35",marginTop:4,display:"flex",justifyContent:"space-between"}},
-            e("span",null,fmtNum(row.data.used||0)+" / "+fmtNum(row.data.limit||0)+" tokens"),
-            e("span",null,fmtNum((row.data.limit||0)-(row.data.used||0))+" remaining")
-          ),
-          e("div",{style:{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginTop:12}},
-            e(StatBox,{label:"TOKENS TODAY", value:fmtNum(row.data.used||0),  color:row.color, small:true}),
-            e(StatBox,{label:"API CALLS",    value:(row.data.reqs||0).toString(), color:row.color, small:true}),
-            e(StatBox,{label:"EST. COST",    value:row.costLabel?"$"+((row.data.cost||0).toFixed(4)):"~$0", color:"#34D399", small:true})
-          ),
-          crit && e("div",{style:{marginTop:12,background:"rgba(248,113,113,.1)",border:"1px solid rgba(248,113,113,.3)",borderRadius:6,padding:"8px 12px",fontSize:9,color:"#F87171"}},
-            "🚨 QUOTA CRITICAL — requests may be throttled"
-          ),
-          !crit && warn && e("div",{style:{marginTop:12,background:"rgba(245,158,11,.1)",border:"1px solid rgba(245,158,11,.3)",borderRadius:6,padding:"8px 12px",fontSize:9,color:"#F59E0B"}},
-            "⚠️ QUOTA HIGH — approaching daily limit"
+          e("div",{style:{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:8}},
+            e(StatBox,{label:"NEXT RUN", value:fmtAgo(job.state?.nextRunAtMs), color:"#D4C9B4", small:true}),
+            e(StatBox,{label:"LAST RUN", value:fmtAgo(job.state?.lastRunAtMs), color:"#D4C9B4", small:true}),
+            e(StatBox,{label:"DELIVERY", value:job.delivery?.mode || "—", color:"#4ECDC4", small:true}),
+            e(StatBox,{label:"ERRORS", value:job.state?.consecutiveErrors || 0, color:(job.state?.consecutiveErrors||0) ? "#F59E0B" : "#34D399", small:true})
           )
         );
       })
@@ -234,6 +223,7 @@ function LogsTab({logs=[]}) {
       : logs.map((l,i) =>
           e("div",{key:i,className:"log-row"},
             e("span",{style:{fontSize:8,color:"#1E2A35",flexShrink:0,minWidth:76}},l.ts?new Date(l.ts).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit",second:"2-digit"}):"—"),
+            e("span",{style:{fontSize:8,color:l.level==="ERROR"?"#F87171":l.level==="WARN"?"#F59E0B":"#1E2A35",flexShrink:0,minWidth:52}},l.level || "INFO"),
             e("span",{style:{fontSize:10,color:"#5A6A7E",lineHeight:1.5}},l.msg)
           )
         )
@@ -241,13 +231,18 @@ function LogsTab({logs=[]}) {
 }
 
 // ── System Tab ───────────────────────────────────────────────────────────────
-function SystemTab({system={}}) {
+function SystemTab({system={}, openclaw={}}) {
   const rows = [
+    {label:"OpenClaw Version", value:openclaw.version?.raw || "—"},
+    {label:"Gateway Service", value:`${openclaw.service?.active || "—"} / ${openclaw.service?.enabled || "—"}`},
+    {label:"Heartbeat Model", value:openclaw.config?.heartbeatModel || "—"},
+    {label:"Daily Note", value:openclaw.dailyNote?.path || "—"},
     {label:"Uptime",   value:system.uptime||"—"},
     {label:"Disk",     value:system.disk||"—"},
     {label:"Memory",   value:(system.memUsed||0)+"MB / "+(system.memTotal||0)+"MB ("+( system.memPct||0)+"%)"},
     {label:"Load Avg", value:system.loadAvg||"—"},
     {label:"Ports",    value:(system.ports||[]).join(", ")||"—"},
+    {label:"Tailscale IP", value:system.tailscaleIp || "—"},
   ];
   return e("div",{style:{flex:1,overflowY:"auto",padding:"16px 20px"}},
     e("div",{style:{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:12}},
@@ -263,12 +258,10 @@ function SystemTab({system={}}) {
 function App() {
   const [data,   setData]   = useState(null);
   const [logs,   setLogs]   = useState([]);
-  const [tab,    setTab]    = useState("agents");
+  const [tab,    setTab]    = useState("overview");
   const [now,    setNow]    = useState(new Date());
   const [error,  setError]  = useState(null);
   const [alert,  setAlert]  = useState(null);
-
-  const prevTokens = useRef(null);
 
   const fetchData = useCallback(async () => {
     try {
@@ -276,24 +269,11 @@ function App() {
         fetch("/api/status").then(r=>r.json()),
         fetch("/api/logs").then(r=>r.json()),
       ]);
-      // Detect token threshold crossings
-      if (prevTokens.current && status.tokens) {
-        const prev = prevTokens.current;
-        const curr = status.tokens;
-        if (curr.claude && prev.claude) {
-          const pct = (curr.claude.used / curr.claude.limit) * 100;
-          const prevPct = (prev.claude.used / prev.claude.limit) * 100;
-          if (pct > 90 && prevPct <= 90) setAlert({msg:"🚨 Claude API quota >90% — Jarvis throttling", sev:"error"});
-          else if (pct > 75 && prevPct <= 75) setAlert({msg:"⚠️ Claude API quota >75%", sev:"warn"});
-        }
-        if (curr.codex && prev.codex) {
-          const pct = (curr.codex.used / curr.codex.limit) * 100;
-          const prevPct = (prev.codex.used / prev.codex.limit) * 100;
-          if (pct > 90 && prevPct <= 90) setAlert({msg:"🚨 Codex quota >90% — sub-agents queuing", sev:"error"});
-          else if (pct > 75 && prevPct <= 75) setAlert({msg:"⚠️ Codex quota >75%", sev:"warn"});
-        }
+      if (status.openclaw && !status.openclaw.dailyNote?.exists) {
+        setAlert({msg:"⚠️ Heartbeat alert: today's daily note is missing, so the heartbeat loop is not writing visible progress.", sev:"warn"});
+      } else if (status.openclaw && !status.openclaw.service?.healthy) {
+        setAlert({msg:"🚨 OpenClaw gateway is not active", sev:"error"});
       }
-      prevTokens.current = status.tokens;
       setData(status);
       setLogs(logsRes.logs || []);
       setError(null);
@@ -308,8 +288,9 @@ function App() {
     return () => clearTimeout(t);
   }, [alert]);
 
-  const { pm2=[], sessions=[], system={}, tokens={} } = data || {};
-  const errorCount = 0; // extend: wire to error events from logs
+  const { openclaw={}, sessions=[], system={}, tokens={} } = data || {};
+  const jobs = openclaw.cron?.jobs || [];
+  const unhealthyJobs = jobs.filter(j => (j.state?.lastStatus || "ok") !== "ok").length;
 
   if (!data) return e("div",{style:{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#F7B731",fontSize:12}},
     "🎬 Connecting to Mission Control..."
@@ -324,14 +305,14 @@ function App() {
       color:alert.sev==="error"?"#F87171":"#F59E0B",
     }}, alert.msg, e("span",{style:{marginLeft:"auto",fontSize:9,opacity:.5}},now.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"}))),
 
-    e(TopBar,{pm2,system,now,error}),
+    e(TopBar,{openclaw,system,now,error}),
 
     // Tabs
     e("div",{style:{display:"flex",borderBottom:"1px solid rgba(255,255,255,.04)",flexShrink:0}},
       [
-        {id:"agents",   label:"Agents",   badge:pm2.filter(p=>p.status!=="online").length},
-        {id:"sessions", label:"Sessions", badge:sessions.filter(s=>!s.alive&&s.status==="running").length},
-        {id:"tokens",   label:"Tokens",   badge:0},
+        {id:"overview", label:"Overview", badge:(!openclaw.dailyNote?.exists || !openclaw.service?.healthy) ? 1 : 0},
+        {id:"cron",     label:"Cron",     badge:unhealthyJobs},
+        {id:"sessions", label:"Sessions", badge:sessions.filter(s=>s.abortedLastRun).length},
         {id:"logs",     label:"Logs",     badge:0},
         {id:"system",   label:"System",   badge:0},
       ].map(t =>
@@ -344,11 +325,11 @@ function App() {
 
     // Tab content
     e("div",{style:{flex:1,display:"flex",overflow:"hidden"}},
-      tab==="agents"   && e(AgentsTab,{pm2}),
+      tab==="overview" && e(OverviewTab,{openclaw,system,tokens}),
+      tab==="cron"     && e(CronTab,{jobs}),
       tab==="sessions" && e(SessionsTab,{sessions}),
-      tab==="tokens"   && e(TokensTab,{tokens}),
       tab==="logs"     && e(LogsTab,{logs}),
-      tab==="system"   && e(SystemTab,{system})
+      tab==="system"   && e(SystemTab,{system,openclaw})
     )
   );
 }

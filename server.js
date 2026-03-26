@@ -4,7 +4,7 @@
  *
  * Routes:
  *   GET /             → dashboard UI (public/index.html)
- *   GET /api/status   → PM2, sessions, system, tokens
+ *   GET /api/status   → OpenClaw, cron, sessions, system, budget policy
  *   GET /api/logs     → recent agent log lines
  *   GET /api/health   → uptime check
  */
@@ -17,21 +17,29 @@ const http = require("http");
 const fs   = require("fs");
 const path = require("path");
 
+function defaultOpenClawLogFile() {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `/tmp/openclaw/openclaw-${yyyy}-${mm}-${dd}.log`;
+}
+
 // ── Adapters (swap any of these out for your own data source) ─────────────────
-const getPM2      = require("./adapters/pm2");
+const getOpenClaw = require("./adapters/openclaw");
+const getTokens   = require("./adapters/tokens");
 const getSessions = require("./adapters/sessions");
 const getLogs     = require("./adapters/logs");
 const getSystem   = require("./adapters/system");
-const getTokens   = require("./adapters/tokens");
 
 // ── Config ────────────────────────────────────────────────────────────────────
-const PORT          = parseInt(process.env.DASHBOARD_PORT   || "3457");
-const TMUX_SOCK     = process.env.TMUX_SOCKET               || `${process.env.HOME}/.tmux/sock`;
-const LOG_FILE      = process.env.LOG_FILE                  || path.join(__dirname, "../logs/activity.log");
-const SESSIONS_FILE = process.env.SESSIONS_FILE             || path.join(__dirname, "../memory/sessions.json");
-const TOKENS_FILE   = process.env.TOKENS_FILE               || path.join(__dirname, "../memory/tokens.json");
-const AUTH_USER     = process.env.DASHBOARD_USER            || "";
-const AUTH_PASS     = process.env.DASHBOARD_PASS            || "";
+const PORT           = parseInt(process.env.DASHBOARD_PORT || "3457", 10);
+const LOG_FILE       = process.env.LOG_FILE || defaultOpenClawLogFile();
+const SESSIONS_FILE  = process.env.SESSIONS_FILE || "/root/.openclaw/agents/main/sessions/sessions.json";
+const OPENCLAW_JSON  = process.env.OPENCLAW_CONFIG || "/root/.openclaw/openclaw.json";
+const MEMORY_DIR     = process.env.MEMORY_DIR || "/root/.openclaw/workspaces/main/memory";
+const AUTH_USER      = process.env.DASHBOARD_USER || "";
+const AUTH_PASS      = process.env.DASHBOARD_PASS || "";
 
 const INDEX_HTML    = path.join(__dirname, "public/index.html");
 
@@ -81,11 +89,12 @@ const server = http.createServer((req, res) => {
 
   // API routes
   if (url === "/api/status") {
+    const openclaw = getOpenClaw(OPENCLAW_JSON, MEMORY_DIR);
     return json(res, {
-      pm2:      getPM2(),
-      sessions: getSessions(SESSIONS_FILE, TMUX_SOCK),
+      openclaw,
+      sessions: getSessions(SESSIONS_FILE),
       system:   getSystem(),
-      tokens:   getTokens(TOKENS_FILE),
+      tokens:   getTokens(),
       ts:       new Date().toISOString(),
     });
   }
@@ -106,7 +115,8 @@ server.listen(PORT, () => {
   console.log(`[Mission Control] Dashboard running on http://localhost:${PORT}`);
   console.log(`[Mission Control] Log file:      ${LOG_FILE}`);
   console.log(`[Mission Control] Sessions file: ${SESSIONS_FILE}`);
-  console.log(`[Mission Control] Tokens file:   ${TOKENS_FILE}`);
+  console.log(`[Mission Control] OpenClaw file: ${OPENCLAW_JSON}`);
+  console.log(`[Mission Control] Memory dir:    ${MEMORY_DIR}`);
   if (AUTH_USER) console.log(`[Mission Control] Basic auth enabled for user: ${AUTH_USER}`);
 });
 

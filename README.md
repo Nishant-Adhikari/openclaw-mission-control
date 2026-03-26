@@ -1,8 +1,8 @@
 # OpenClaw Mission Control
 
-A real-time dashboard for monitoring AI agent systems running on OpenClaw + PM2.
+A real-time dashboard for monitoring an OpenClaw system running under `systemd`.
 
-Surfaces live data from PM2 process manager, tmux agent sessions, token usage (Claude API + Codex), logs, and system health — all in a single browser tab.
+Surfaces live data from OpenClaw itself: gateway health, Discord connectivity, cron jobs, session store, daily note status, logs, and host health — all in a single browser tab.
 
 ![Mission Control Dashboard](./docs/preview.png)
 
@@ -12,11 +12,11 @@ Surfaces live data from PM2 process manager, tmux agent sessions, token usage (C
 
 | Panel | Data |
 |-------|------|
-| **Agents** | PM2 process status, CPU, memory, uptime, restart count |
-| **Sessions** | Active Ralph loop tmux sessions — which agent, which task, alive/dead |
-| **Token Usage** | Claude API quota %, Codex quota %, per-request cost estimate |
-| **Logs** | Live activity log from all agents, auto-refreshes every 5s |
-| **System** | Droplet CPU load, memory %, disk usage, open ports |
+| **Overview** | OpenClaw version, service health, Discord probe, model policy, daily note status |
+| **Cron** | Active cron jobs, next/last run, status, consecutive errors |
+| **Sessions** | OpenClaw session store activity |
+| **Logs** | OpenClaw log tail with parsed JSON log lines |
+| **System** | Uptime, memory, disk, open ports, Tailscale IP |
 
 ---
 
@@ -24,8 +24,8 @@ Surfaces live data from PM2 process manager, tmux agent sessions, token usage (C
 
 - **Backend:** Node.js + built-in `http` module (zero dependencies beyond what OpenClaw already has)
 - **Frontend:** Vanilla React (loaded from CDN) — single HTML file, no build step
-- **Process manager:** PM2 (sits alongside your existing agents)
-- **Data sources:** `pm2 jlist`, tmux socket, log files, `memory/tokens.json`
+- **Runtime target:** OpenClaw on `systemd`
+- **Data sources:** `openclaw --version`, `openclaw channels status --probe --json`, `openclaw cron list --json`, session store JSON, OpenClaw log files, host shell commands
 
 ---
 
@@ -39,11 +39,13 @@ cd openclaw-mission-control
 # 2. Install deps
 npm install
 
-# 3. Add to PM2 alongside your existing agents
-pm2 start ecosystem.config.js
-pm2 save
+# 3. Configure paths
+cp .env.example .env
 
-# 4. Open in browser
+# 4. Start
+npm start
+
+# 5. Open in browser
 open http://YOUR_DROPLET_IP:3457
 ```
 
@@ -56,27 +58,24 @@ All config is via environment variables in `.env`:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DASHBOARD_PORT` | `3457` | Port the dashboard serves on |
-| `TMUX_SOCKET` | `~/.tmux/sock` | Path to stable tmux socket |
-| `LOG_FILE` | `../logs/activity.log` | Path to agent activity log |
-| `SESSIONS_FILE` | `../memory/sessions.json` | Path to agent sessions JSON |
-| `TOKENS_FILE` | `../memory/tokens.json` | Path to token usage JSON |
+| `LOG_FILE` | `/tmp/openclaw/openclaw-YYYY-MM-DD.log` | Path to OpenClaw log file |
+| `SESSIONS_FILE` | `/root/.openclaw/agents/main/sessions/sessions.json` | OpenClaw session store |
+| `OPENCLAW_CONFIG` | `/root/.openclaw/openclaw.json` | OpenClaw config path |
+| `MEMORY_DIR` | `/root/.openclaw/workspaces/main/memory` | Daily notes directory |
 | `DASHBOARD_USER` | _(none)_ | Basic auth username (optional) |
 | `DASHBOARD_PASS` | _(none)_ | Basic auth password (optional) |
 
 ---
 
-## Token tracking
+## Budget policy
 
-The dashboard reads from `memory/tokens.json`. Your agent bot should write to this file after each API call:
+The dashboard currently shows static budget guardrails from your OpenClaw operating policy:
+- daily target
+- monthly target
+- routine output target
+- complex output target
 
-```json
-{
-  "claude": { "used": 14820, "limit": 100000, "reqs": 23, "cost": 0.0037 },
-  "codex":  { "used": 47300, "limit": 200000, "reqs": 61 }
-}
-```
-
-See `docs/token-tracking.md` for how to wire this into your bot.
+If you want live provider spend, add a new adapter that reads provider usage APIs or a local spend ledger.
 
 ---
 
@@ -86,7 +85,7 @@ By default the dashboard is open on the port — **don't expose it publicly with
 
 Set `DASHBOARD_USER` and `DASHBOARD_PASS` in `.env` to enable HTTP Basic Auth.
 
-Or restrict access with a firewall rule:
+Or expose it only on Tailscale / behind a firewall:
 ```bash
 ufw allow from YOUR_IP_ADDRESS to any port 3457
 ```
@@ -99,11 +98,11 @@ The backend uses an adapter pattern so you can swap out data sources:
 
 ```
 adapters/
-  pm2.js        ← reads from pm2 jlist
-  tmux.js       ← reads from tmux socket
-  logs.js       ← reads from log files
-  tokens.js     ← reads from memory/tokens.json
-  system.js     ← reads from /proc and shell commands
+  openclaw.js   ← reads version, channels, cron, config, daily note state
+  sessions.js   ← reads OpenClaw session store
+  logs.js       ← reads and parses OpenClaw logs
+  tokens.js     ← serves budget policy defaults
+  system.js     ← reads /proc, ports, Tailscale, shell commands
 ```
 
 To add a new data source, create a new adapter and register it in `server.js`.
